@@ -1,0 +1,506 @@
+
+
+import time
+import os
+import logging
+import argparse
+from multiprocessing import Pool  # https://docs.python.org/3/library/multiprocessing.html
+from operator import itemgetter
+from sage.all import *
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--ntrutype', default=1, type=int)
+parser.add_argument('--n', default=821, type=int)
+parser.add_argument('--q', default=4096, type=int)
+parser.add_argument('--hw', default=511, type=int)  # target degree for G_shift
+parser.add_argument('--seed-start', default=0, type=int)
+parser.add_argument('--seed-end', default=100, type=int)
+parser.add_argument('--processes', default=os.cpu_count(), type=int)
+
+
+args = parser.parse_args()
+
+
+
+## If you want to solve NTRU run  parallel_calc_NTRU(seed_val, args.n, args.q, args.hw) in main(seed_val) algorithm
+## If you want to solve NTRUprime run  parallel_calc_NTRUprime(seed_val, args.n, args.q, args.hw) in main(seed_val) algorithm
+
+
+
+
+logging.basicConfig(
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    level=logging.INFO,  # DEBUG  # INFO  # ERROR
+)
+logger = logging.getLogger(__name__)
+logger.info(
+    'Starting with (ntrutype, n, q, hw) = (%d, %d, %d, %d)',
+    args.ntrutype, args.n, args.q, args.hw
+)
+logger.info(
+    'Running %d processes in parallel. Seed in range (%d, %d)',
+    args.processes, args.seed_start, args.seed_end
+)
+
+
+
+
+
+def mod(a,q):
+
+   temp = a%q
+
+   if temp > q/2:
+
+      temp -= q
+
+   return temp
+
+
+
+
+
+def ringmod(s,q,xn,n):
+
+   temp = 0
+
+   for i in range(n):
+
+      temp += xn^i * (s[i]%q)
+
+   return temp
+
+
+
+def R2toZZ(g,xn,n):
+
+   temp = 0 
+
+   for i in range(n):
+
+      temp += xn^i*ZZ(g[i])
+
+   return temp
+
+
+
+def Rqto2(g,F2,x2p,n):
+
+   temp = 0 
+
+   for i in range(n):
+
+      temp += x2p^i*F2(g[i])
+
+   return temp
+
+
+
+def ZZtoRq(g,Fq,xqp,n):
+
+   temp = 0 
+
+   for i in range(n):
+
+      temp += xqp^i*Fq(g[i])
+
+   return temp
+
+
+
+
+
+
+
+def Rqconjugate(g,xqp,n):
+
+   temp = 0 
+
+   for i in range(n):
+
+      temp += g[i]*(-xqp)^i
+
+   return temp
+
+
+
+
+
+
+
+
+
+
+
+def smallgen(Rq ,n, xqp ):
+
+   temp = 0
+
+   for i in range(n):
+
+      temp += xqp^i*randint(-1,1)
+
+   return temp
+
+
+
+
+
+
+
+
+
+
+
+def sparseternarygen(Rq,size,n,xqp,hw1,hw2,p):
+
+   temp = 0
+
+   for i in range(1,hw1+1):
+
+      temp += xqp^(p(i)-1)
+
+   for i in range(hw1+1,hw1+hw2+1):
+
+      temp += xqp^(p(i)-1)* (-1)
+
+   return temp
+
+
+
+
+
+
+
+
+
+
+
+
+
+def makerelation_NTRU(Fq,Rq,a,n,xqp):
+
+   tempvec = vector(ZZ,n)
+
+   for j in range(n):
+
+      tempvec[j] = ZZ(Rq(a*xqp^j)[0])
+
+   return tempvec
+
+
+
+
+
+
+
+
+
+
+
+def makerelation(Fq,Rq,a,n,xqp):
+
+   tempvec = vector(Fq,n)
+   
+   for j in range(n):
+      tempvec[j] = sum((a*xqp^j).list())
+
+   return tempvec
+
+
+
+
+
+
+
+
+
+
+
+
+
+def multternaryNTRU_gen(Rq, q,g,n,hw1,hw2,xqp,P,xn,ZZxn,Fq,ginv):
+
+   F = vector(Rq,ZZ(n))
+
+   H = vector(Rq,ZZ(n))
+
+   ca = P.cardinality()
+
+   #ginv = R2inverse(n,q,g,Rq,xqp,xn)
+
+   #print('test12')
+
+   for i in range(ZZ(n)):
+
+      #print(i)
+
+      p = P[randint(0, ca)]
+
+      F[i] = sparseternarygen(Rq,1,ZZ(n),xqp,hw1,hw2,p)
+
+      H[i] = Rq(F[i])* ginv
+
+   return F,H
+
+
+
+
+
+
+
+
+
+def multternaryNTRUprime_gen(Rq, q,g,n,hw1,hw2,xqp,P):
+
+   F = vector(Rq,ZZ(n))
+
+   H = vector(Rq,ZZ(n))
+
+   ca = P.cardinality()
+
+   for i in range(ZZ(n)):
+
+      #print(i)
+
+      p = P[randint(0, ca)]
+
+      F[i] = sparseternarygen(Rq,1,ZZ(n),xqp,hw1,hw2,p)
+
+      H[i] = (Rq(F[i])/Rq(g))
+
+   return F,H
+
+
+
+
+
+
+
+
+
+def ternaryNTRUprime_solve(Rq,Fq,q,H,hw1,hw2,xqp,n):
+
+   tempmat = matrix(GF(q),n)
+
+   tempvec = vector(GF(q),n)
+
+   for i in range(ZZ(n)):
+
+      #print(i)
+
+      tempvec[i] = hw1-hw2
+
+      temph = Rq(H[i])
+
+      tempmat[i] = makerelation(Fq,Rq,temph,n,xqp)
+
+   return tempmat, tempvec
+
+
+
+
+
+
+
+def ternaryNTRU_solve(Rq,Fq,H,hw1,hw2,xqp,n):
+
+   tempmat = matrix(ZZ,ZZ(n))
+
+   tempvec = vector(ZZ,ZZ(n))
+
+   for i in range(ZZ(n)):
+
+      #print(i)
+
+      tempvec[i] = hw1+hw2
+
+      temph = H[i]*Rqconjugate(H[i],xqp,n)
+
+      tempmat[i] = makerelation_NTRU(Fq, Rq,temph,n,xqp)
+
+   return tempmat, tempvec
+
+
+
+
+
+
+
+def R2inverse(n,q,g,Rq,Fq,xqp,xn):
+
+   F2 = GF(ZZ(2)) 
+
+   F2x2.<x2> = F2[] 
+
+   R2.<x2p> = F2x2.quotient(x2^ZZ(n)  -1)
+
+   tempinv = R2(1)/Rqto2(g,F2,x2p,n)
+
+   tempinv = R2toZZ(tempinv,xn,n)
+
+   tempg = R2toZZ(g,xn,n)
+
+   r = ringmod((tempinv*tempg),q,xn,n)
+
+   #print('test13')
+
+   while r != 1:
+
+      #print('test154')
+
+      tempinv = ringmod(tempinv*(2-r),q,xn,n)
+
+      r = ringmod((tempinv*tempg),q,xn,n)
+
+      if r == 1: break
+
+   return ZZtoRq(tempinv,Fq,xqp,n)
+
+
+
+
+
+
+
+def parallel_calc_NTRU(seed_val, n, q, hw):
+
+   success = 0
+
+   P = Permutations(ZZ(n))
+
+   hw1 = randint(0,hw)
+
+   hw2 = hw - hw1
+
+   ZZx.<x> = ZZ[]
+
+   ZZxn.<xn> = ZZx.quotient(x^n -1)
+
+   Fq = IntegerModRing(ZZ(q))
+
+   Fqx.<xq> = Fq[] 
+
+   Rq.<xqp> = Fqx.quotient(xq^ZZ(n)  -1)
+
+   g = smallgen(Rq,ZZ(n),xqp)
+
+   #print('test1')
+
+   while gcd(g.norm(),q) != 1:
+
+      g = smallgen(Rq,ZZ(n),xqp)
+
+   ginv = R2inverse(n,q,g,Rq,Fq, xqp,xn)
+
+   #print('test11')
+
+   F,H= multternaryNTRU_gen(Rq, ZZ(q),g, ZZ(n),ZZ(hw1),ZZ(hw2),xqp,P,xn,ZZxn,Fq,ginv)  
+
+   #print('test2')
+
+   M, V = ternaryNTRU_solve(Rq,q,H,ZZ(hw1),ZZ(hw2),xqp,n)
+
+   #print('test3')
+
+   tempmmat = matrix(ZZ,ZZ(2*n),ZZ(n))
+
+   tempmmat[0:n,0:n] = M
+
+   for i in range(n):
+
+      tempmmat[n+i,i] = q
+
+   tempmmat = tempmmat.echelon_form()
+
+   temp = prod(tempmmat.diagonal())
+
+   if gcd(temp,q) == 1:
+
+      success += 1
+
+   return (seed_val, success)
+
+
+
+
+
+
+
+
+
+def parallel_calc_NTRUprime(seed_val, n, q, hw):
+
+   success = 0
+
+   P = Permutations(ZZ(n))
+
+   hw1 = randint(0,hw)
+
+   hw2 = hw - hw1
+
+   Fq = GF(ZZ(q)) 
+
+   Fqx.<xq> = Fq[] 
+
+   Rq.<xqp> = Fqx.quotient(xq^ZZ(n) - xq -1)
+
+   g = smallgen(Rq,ZZ(n),xqp)
+
+   #print('test1')
+
+   while gcd(g.norm(),q) != 1:
+
+      g = smallgen(Rq,ZZ(n),xqp)
+
+   F,H= multternaryNTRUprime_gen(Rq, ZZ(q), g, ZZ(n),ZZ(hw1),ZZ(hw2),xqp,P) 
+
+   M, V = ternaryNTRUprime_solve(Rq,Fq,q,H,ZZ(hw1),ZZ(hw2),xqp,n)
+
+   #G = vector(GF(q),(g).list())
+
+   #print(M.rank())
+
+   if M.rank() == ZZ(n):
+
+      success += 1
+
+   return (seed_val, success)
+
+
+
+
+
+
+
+
+
+
+
+def main(seed_val):
+
+    set_random_seed(seed_val)
+
+    print(seed_val)
+
+    return parallel_calc_NTRU(seed_val, args.n, args.q, args.hw)
+
+
+## If you want to solve NTRU run  parallel_calc_NTRU(seed_val, args.n, args.q, args.hw) in main(seed_val) algorithm
+## If you want to solve NTRUprime run  parallel_calc_NTRUprime(seed_val, args.n, args.q, args.hw) in main(seed_val) algorithm
+
+
+
+if __name__ == '__main__':
+
+    with Pool(processes=args.processes) as pool:
+
+        res = pool.map(main, range(args.seed_start, args.seed_end))
+
+    success_cnt = sum(item[1] for item in res)
+
+    logger.info('Success %d out of %d times', success_cnt, (args.seed_end-args.seed_start))
+
+
+
