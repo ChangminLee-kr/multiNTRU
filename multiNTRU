@@ -406,7 +406,7 @@ def parallel_calc_NTRU(seed_val, n, q, hw):
 
    ### Check whether there exists an integral vector X such that M*X  = V \bmod q.
    if (M.echelon_form()%q).rank() == (M.augment(V).echelon_form()%q).rank():
-      if (M.echelon_form()%q).rank() == (n-1)/2:
+      if (M.echelon_form()%q).rank() == (n+1)/2:
           success += 1
 
 
